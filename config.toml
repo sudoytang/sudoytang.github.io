@@ -16,3 +16,23 @@ highlight_code = true
 
 [extra]
 # Put all your custom variables here
+
+# The profile on home page
+[extra.profile]
+name = "Shun 口一说"
+bio = "欢迎来到这个小角落！这里会聊聊技术，记录想法，也可能分享些生活中的碎碎念。不求深刻，都是顺口的事！"
+# avatar_url = "https://github.com/sudoytang.png"
+# avatar_invert = true
+
+# Social links (uncomment and customize as needed)
+[[extra.profile.social]]
+name = "github"
+url = "https://github.com/sudoytang"
+# 
+[[extra.profile.social]]
+name = "email"
+url = "mailto:yushun.tang@foxmail.com"
+# 
+# [[extra.profile.social]]
+# name = "rss"
+# url = "$BASE_URL/atom.xml"
