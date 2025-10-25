@@ -1,0 +1,625 @@
+<!doctype html>
+<html class="not-ready lg:text-base" lang="en">
+  <head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+
+  <!-- Title -->
+  <title>
+    从C语言理解Rust Aliasing Rule - 
+  </title>
+
+  <!-- Meta -->
+  <meta name="theme-color" />
+
+  
+  <!-- Author -->
+  
+  <!---->
+  
+  <!---->
+  
+  <!---->
+  
+  <!---->
+  
+  <!---->
+  <meta name="description" content="从 C 语言的 restrict 关键字和 memcpy&#x2F;memmove 区别出发，理解 Rust 的 aliasing rule 如何帮助编译器进行更激进的优化。" />
+  <meta name="author" content="" />
+  <!-- The Open Graph protocol -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="从C语言理解Rust Aliasing Rule" />
+  <meta property="og:site_name" content="" />
+  <meta property="og:description" content="从 C 语言的 restrict 关键字和 memcpy&#x2F;memmove 区别出发，理解 Rust 的 aliasing rule 如何帮助编译器进行更激进的优化。" />
+  <meta property="og:url" content="https:&#x2F;&#x2F;sudoytang.github.io&#x2F;rust-aliasing-rules&#x2F;" />
+  
+  <!---->
+  
+  <!---->
+  
+
+  <!-- CSS & JS -->
+  <link rel="preload stylesheet" as="style" href="https://sudoytang.github.io/main.css" />
+  <style>
+    :root {
+      --bg: #f4f4f5;
+      --bg-dark: #18181b;
+      --header: #e4e4e7;
+      --header-dark: #27272a;
+    }
+  </style>
+
+  
+
+  <!-- Dark Icon -->
+  <link rel="preload" as="image" href="https://sudoytang.github.io/icons/theme.svg" />
+
+  <!-- Math -->
+  
+  <!---->
+
+  <!-- Mermaid -->
+  
+  <!---->
+
+  <!-- Favicon -->
+  <link rel="icon" href="https://sudoytang.github.io/favicon.ico" />
+  <link rel="apple-touch-icon" href="https://sudoytang.github.io/apple-touch-icon.png" />
+
+  <!-- Feeds -->
+  
+
+  <!-- Canonical -->
+  <link rel="canonical" href="https:&#x2F;&#x2F;sudoytang.github.io&#x2F;rust-aliasing-rules&#x2F;" />
+
+  <!-- Head inject -->
+  
+</head>
+
+  <body class="text-black duration-200 ease-out dark:text-white">
+    <header
+  class="header fixed top-0 z-40 mx-auto min-h-[3.5rem] w-full"
+>
+  <div class="mx-auto w-full max-w-4xl p-3 lg:flex lg:justify-between">
+    <div class="flex justify-between">
+      <div class="flex items-center">
+        <a class="text-2xl font-semibold" href="https://sudoytang.github.io"></a>
+        <div
+          class="btn-dark ml-4 h-6 w-6 shrink-0 cursor-pointer text-[0px] [background:url(./icons/theme.svg)_left_center/cover_no-repeat] dark:[background-position:right] dark:invert"
+          role="button"
+          aria-label="Dark"
+        ></div>
+      </div>
+      
+    </div>
+    <script>
+      // base
+      const htmlClass = document.documentElement.classList;
+      setTimeout(() => {
+        htmlClass.remove("not-ready");
+      }, 10);
+
+      // mobile menu
+      const btnMenu = document.querySelector(".btn-menu");
+      btnMenu?.addEventListener("click", () => {
+        htmlClass.toggle("open");
+      });
+
+      // dark theme
+      const setDark = (isDark) => {
+        if (isDark) {
+          document.body.dispatchEvent(new CustomEvent("set-theme", { detail: "dark" }));
+          htmlClass.add("dark");
+        } else {
+          document.body.dispatchEvent(new CustomEvent("set-theme", { detail: "light" }));
+          htmlClass.remove("dark");
+        }
+        localStorage.setItem("dark", isDark);
+      };
+
+      // init
+      const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
+      if (htmlClass.contains("dark")) {
+        setDark(true);
+      } else {
+        const darkVal = localStorage.getItem("dark");
+        setDark(darkVal ? darkVal === "true" : darkScheme.matches);
+      }
+
+      // listen system
+      darkScheme.addEventListener("change", (event) => {
+        setDark(event.matches);
+      });
+
+      // manual switch
+      const btnDark = document.querySelector(".btn-dark");
+      btnDark.addEventListener("click", () => {
+        setDark(localStorage.getItem("dark") !== "true");
+      });
+    </script>
+    
+  </div>
+</header>
+
+
+    <!-- Body Start inject -->
+    
+
+    <main
+      class="prose prose-neutral dark:prose-invert prose-pre:rounded-lg prose-img:rounded-lg relative mx-auto min-h-[calc(100vh-9rem)] max-w-3xl px-4 pt-24 pb-16 break-words lg:pt-32"
+    >
+      
+<article>
+  <!-- Page Start inject -->
+  
+
+  <header class="mb-16">
+    <h1 class="my-0! pb-2.5">从C语言理解Rust Aliasing Rule</h1>
+    <div class="text-sm antialiased opacity-60">
+  
+  <time>2025-10-24</time>
+  <span class="mx-1">&middot;</span>
+  <span>14min</span>
+  <!---->
+  <!---->
+  <!---->
+  <!---->
+  
+  <!-- Page Info inject -->
+  
+</div>
+
+  </header>
+
+  
+
+  <!-- TOC -->
+  <!---->
+<div class="block-bg mb-12 flex rounded-lg p-2 text-lg">
+  <details>
+    <summary class="cursor-pointer py-1 pl-4">
+      <span>Table of Contents</span>
+    </summary>
+    <div class="px-2">
+      <ul>
+        
+        <li>
+          <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#qian-yan"
+            >前言</a
+          >
+          
+        </li>
+        
+        <li>
+          <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#cyu-yan-zhong-de-aliasing-rule"
+            >C语言中的 Aliasing Rule</a
+          >
+          
+          <ul>
+            
+            <li>
+              <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#shen-me-shi-aliasing"
+                >什么是 Aliasing？</a
+              >
+            </li>
+            
+            <li>
+              <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#yi-ge-ju-ti-de-li-zi"
+                >一个具体的例子</a
+              >
+            </li>
+            
+            <li>
+              <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#restrict-guan-jian-zi-gao-su-bian-yi-qi-bu-hui-you-bie-ming"
+                >restrict 关键字：告诉编译器&quot;不会有别名&quot;</a
+              >
+            </li>
+            
+          </ul>
+          
+        </li>
+        
+        <li>
+          <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#rustde-aliasing-rule"
+            >Rust的Aliasing Rule</a
+          >
+          
+          <ul>
+            
+            <li>
+              <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#yin-yong-tian-ran-bao-zheng-no-aliasing"
+                >引用天然保证 No-Aliasing</a
+              >
+            </li>
+            
+            <li>
+              <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#luo-zhi-zhen-hui-dao-c-de-shi-jie"
+                >裸指针：回到 C 的世界</a
+              >
+            </li>
+            
+            <li>
+              <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#borrow-rules-qiang-hua-de-aliasing-rules"
+                >Borrow Rules = 强化的 Aliasing Rules</a
+              >
+            </li>
+            
+          </ul>
+          
+        </li>
+        
+        <li>
+          <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#rust-reference-zen-me-xie-de"
+            >Rust Reference 怎么写的？</a
+          >
+          
+        </li>
+        
+        <li>
+          <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#ti-wai-hua-c-de-strict-aliasing-rule"
+            >题外话：C++ 的 Strict Aliasing Rule</a
+          >
+          
+        </li>
+        
+        <li>
+          <a class="no-underline hover:underline" href="https://sudoytang.github.io/rust-aliasing-rules/#zong-jie"
+            >总结</a
+          >
+          
+        </li>
+        
+      </ul>
+    </div>
+  </details>
+</div>
+
+<!---->
+
+  <!-- Content -->
+  <section><h2 id="qian-yan">前言</h2>
+<p>在学习 Rust 的过程中，我们经常听说 Rust 的借用检查器（borrow checker）不仅保证了内存安全，还能帮助编译器做出更激进的优化。
+Prof. Baochun Li 在 ECE 1724 Rust 课程的《Lifetimes》Lecture 中提到了 Aliasing，并举了以下例子：</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">fn </span><span style="color:#8fa1b3;">compute</span><span>(</span><span style="color:#bf616a;">input</span><span>: &amp;</span><span style="color:#b48ead;">u32</span><span>, </span><span style="color:#bf616a;">output</span><span>: &amp;</span><span style="color:#b48ead;">mut u32</span><span>) {
+</span><span>    </span><span style="color:#b48ead;">if </span><span>*input &gt; </span><span style="color:#d08770;">10 </span><span>{
+</span><span>        *output = </span><span style="color:#d08770;">1</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#b48ead;">if </span><span>*input &gt; </span><span style="color:#d08770;">5 </span><span>{
+</span><span>        *output *= </span><span style="color:#d08770;">2</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#65737e;">// `*output` will be `2` if `input &gt; 10`
+</span><span>}
+</span></code></pre>
+<p>他从可优化性的角度解释了 aliasing 假设对编译优化的影响。然而，对于被 borrow checker 保护得太好的 Rust 使用者来说，这段代码的可优化性似乎是理所当然的——毕竟借用规则不允许同时存在可变引用和不可变引用。这反而让人有点摸不着头脑：这和优化有什么关系？</p>
+<p>要真正理解这个问题，我们需要回到 C 语言，看看在没有借用检查的世界里，编译器面临着怎样的困境。本文将从 C 语言的 aliasing 问题出发，逐步理解 Rust 的 aliasing rule 为编译器带来的价值。</p>
+<h2 id="cyu-yan-zhong-de-aliasing-rule">C语言中的 Aliasing Rule</h2>
+<h3 id="shen-me-shi-aliasing">什么是 Aliasing？</h3>
+<p><strong>Aliasing（别名）</strong> 指的是两个或多个指针指向同一块内存区域的情况。当函数接收多个指针参数时，因为这些指针可能来自任何地方，编译器通常无法确定这些指针是否会指向重叠的内存，这就是 <strong>pointer aliasing problem</strong>。</p>
+<p>一个经典的例子是 C 标准库中的 <code>memcpy</code> 和 <code>memmove</code>：</p>
+<pre data-lang="c" style="background-color:#2b303b;color:#c0c5ce;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#b48ead;">void </span><span>*</span><span style="color:#8fa1b3;">memcpy</span><span>(</span><span style="color:#b48ead;">void </span><span>*</span><span style="color:#b48ead;">restrict </span><span style="color:#bf616a;">dest</span><span>, </span><span style="color:#b48ead;">const void </span><span>*</span><span style="color:#b48ead;">restrict </span><span style="color:#bf616a;">src</span><span>, size_t </span><span style="color:#bf616a;">n</span><span>);
+</span><span style="color:#b48ead;">void </span><span>*</span><span style="color:#8fa1b3;">memmove</span><span>(</span><span style="color:#b48ead;">void </span><span>*</span><span style="color:#bf616a;">dest</span><span>, </span><span style="color:#b48ead;">const void </span><span>*</span><span style="color:#bf616a;">src</span><span>, size_t </span><span style="color:#bf616a;">n</span><span>);
+</span></code></pre>
+<p>注意到它们的函数签名有一个关键区别：<code>memcpy</code> 的参数带有 <code>restrict</code> 关键字，而 <code>memmove</code> 没有。</p>
+<ul>
+<li><strong><code>memcpy</code></strong>：假设源和目标内存区域<strong>不重叠</strong>（no-alias），可以做激进优化（如并行拷贝、向量化）</li>
+<li><strong><code>memmove</code></strong>：允许源和目标内存区域<strong>重叠</strong>（may-alias），必须小心处理拷贝顺序</li>
+</ul>
+<p>这两个函数存在的原因正是因为 aliasing 的情况不同，需要不同的实现策略。</p>
+<h3 id="yi-ge-ju-ti-de-li-zi">一个具体的例子</h3>
+<p>让我们把前面的 Rust 例子翻译成 C 语言，看看编译器会生成什么样的代码：</p>
+<pre data-lang="c" style="background-color:#2b303b;color:#c0c5ce;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#65737e;">// 版本1：不带 restrict
+</span><span style="color:#b48ead;">void </span><span style="color:#8fa1b3;">compute</span><span>(</span><span style="color:#b48ead;">const unsigned int </span><span>*</span><span style="color:#bf616a;">input</span><span>, </span><span style="color:#b48ead;">unsigned int </span><span>*</span><span style="color:#bf616a;">output</span><span>) {
+</span><span>    </span><span style="color:#b48ead;">if </span><span>(*input &gt; </span><span style="color:#d08770;">10</span><span>) {
+</span><span>        *output = </span><span style="color:#d08770;">1</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#b48ead;">if </span><span>(*input &gt; </span><span style="color:#d08770;">5</span><span>) {
+</span><span>        *output *= </span><span style="color:#d08770;">2</span><span>;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>在这个版本中，编译器<strong>不知道</strong> <code>input</code> 和 <code>output</code> 是否指向同一块内存。因此它必须保守地假设它们<strong>可能</strong>指向同一地址。</p>
+<p>让我们看看编译器会做什么（使用 <code>gcc -O2</code> 编译）：</p>
+<pre data-lang="asm" style="background-color:#2b303b;color:#c0c5ce;" class="language-asm "><code class="language-asm" data-lang="asm"><span style="color:#8fa1b3;">compute:
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rdi</span><span>]</span><span style="color:#65737e;">    ; unsigned temp = *arg0;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">10</span><span style="color:#65737e;">                 ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jle     </span><span style="color:#8fa1b3;">.L2</span><span style="color:#65737e;">                     ; if (temp &gt; 10) {
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rsi</span><span>], </span><span style="color:#d08770;">1</span><span style="color:#65737e;">      ;   *arg1 = 1;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rdi</span><span>]</span><span style="color:#65737e;">    ;   temp = *arg0;   // 注意：这里重新从内存取了值
+</span><span style="color:#8fa1b3;">.L2:</span><span style="color:#65737e;">                                    ; }
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">5</span><span style="color:#65737e;">                  ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jle     </span><span style="color:#8fa1b3;">.L1</span><span style="color:#65737e;">                     ; if (temp &gt; 5) {
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">sal     </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rsi</span><span>]</span><span style="color:#65737e;">         ;   *arg2 &lt;&lt;= 1;
+</span><span style="color:#8fa1b3;">.L1:</span><span style="color:#65737e;">                                    ; }
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                             ; return;
+</span></code></pre>
+<p>注意关键的一点：<code>*input</code> 被<strong>读取了两次</strong>（第 6 行再次从 <code>[rdi]</code> 读取）。</p>
+<p><strong>为什么？</strong> 因为编译器担心 <code>input</code> 和 <code>output</code> 可能指向同一地址。如果它们是同一个指针，那么第一个 <code>if</code> 块中的 <code>*output = 1</code> 就改变了 <code>*input</code> 的值！因此，第二个 <code>if</code> 必须重新读取 <code>*input</code> 的值，不能直接使用之前读取的值。</p>
+<p>这就是 aliasing 带来的性能损失：编译器不得不生成保守的代码。</p>
+<h3 id="restrict-guan-jian-zi-gao-su-bian-yi-qi-bu-hui-you-bie-ming">restrict 关键字：告诉编译器"不会有别名"</h3>
+<p>C99 引入了 <code>restrict</code> 关键字，它是程序员向编译器做出的<strong>承诺</strong>：这个指针指向的内存区域在函数执行期间不会通过其他指针访问。</p>
+<pre data-lang="c" style="background-color:#2b303b;color:#c0c5ce;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#65737e;">// 版本2：带 restrict
+</span><span style="color:#b48ead;">void </span><span style="color:#8fa1b3;">compute_restrict</span><span>(</span><span style="color:#b48ead;">const unsigned int </span><span>*</span><span style="color:#b48ead;">restrict </span><span style="color:#bf616a;">input</span><span>, 
+</span><span>                      </span><span style="color:#b48ead;">unsigned int </span><span>*</span><span style="color:#b48ead;">restrict </span><span style="color:#bf616a;">output</span><span>) {
+</span><span>    </span><span style="color:#b48ead;">if </span><span>(*input &gt; </span><span style="color:#d08770;">10</span><span>) {
+</span><span>        *output = </span><span style="color:#d08770;">1</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#b48ead;">if </span><span>(*input &gt; </span><span style="color:#d08770;">5</span><span>) {
+</span><span>        *output *= </span><span style="color:#d08770;">2</span><span>;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>现在我们只是在函数签名上加了 <code>restrict</code>，函数体完全相同。再看编译结果（<code>gcc -O2</code>）：</p>
+<pre data-lang="asm" style="background-color:#2b303b;color:#c0c5ce;" class="language-asm "><code class="language-asm" data-lang="asm"><span style="color:#8fa1b3;">compute_restrict:
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rdi</span><span>]</span><span style="color:#65737e;">    ; unsigned temp = *arg0;  // 注意：只读取一次arg0
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">10</span><span style="color:#65737e;">                 ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jg      </span><span style="color:#8fa1b3;">.L8</span><span style="color:#65737e;">                     ; if (temp &gt; 10) goto L8;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">5</span><span style="color:#65737e;">                  ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jg      </span><span style="color:#8fa1b3;">.L9</span><span style="color:#65737e;">                     ; if (temp &gt; 5) goto L9;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                             ;   return;
+</span><span style="color:#8fa1b3;">.L8:</span><span style="color:#65737e;">                                    ; L8:
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">2</span><span style="color:#65737e;">                  ; temp = 2;  // 注意：这里直接得到 *arg1 = 1 * 2;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rsi</span><span>], </span><span style="color:#bf616a;">eax</span><span style="color:#65737e;">    ; *arg1 = temp;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                             ; return;
+</span><span style="color:#8fa1b3;">.L9:</span><span style="color:#65737e;">                                    ; L9:
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rsi</span><span>]</span><span style="color:#65737e;">    ; temp = *arg1;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">add     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#bf616a;">eax</span><span style="color:#65737e;">                ; temp *= 2;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rsi</span><span>], </span><span style="color:#bf616a;">eax</span><span style="color:#65737e;">    ; *arg1 = temp;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                             ; return;
+</span></code></pre>
+<p>对比两个版本，区别非常明显：</p>
+<ol>
+<li><strong><code>*input</code> 只被读取一次</strong>（第 1 行 <code>mov eax, DWORD PTR [rdi]</code>）：编译器知道 <code>*output = 1</code> 不会影响 <code>*input</code> 的值，可以在之后的比较中继续使用寄存器 <code>eax</code> 中的值</li>
+<li><strong>更激进的优化</strong>：当 <code>*input &gt; 10</code> 时（<code>.L8</code> 分支），编译器推导出最终结果是 <code>2</code>，直接将常量 <code>2</code> 赋值并写入 <code>*output</code>，而不是先写 <code>1</code> 再乘以 <code>2</code></li>
+</ol>
+<p>这就是 <code>restrict</code> 关键字的威力：它让编译器能够根据 no-alias 假设进行更全面的优化。</p>
+<h2 id="rustde-aliasing-rule">Rust的Aliasing Rule</h2>
+<p>现在我们回到 Rust。理解了 C 语言的问题后，Rust 的优势就显而易见了。</p>
+<h3 id="yin-yong-tian-ran-bao-zheng-no-aliasing">引用天然保证 No-Aliasing</h3>
+<p>Rust 对引用有严格的借用规则：</p>
+<ul>
+<li><strong>要么</strong>有多个不可变引用（<code>&amp;T</code>）</li>
+<li><strong>要么</strong>有一个可变引用（<code>&amp;mut T</code>）</li>
+<li><strong>但不能同时存在</strong></li>
+</ul>
+<p>这个规则天然地保证了：<strong>当存在可变引用时，不会有其他引用指向同一块内存</strong>。这正是 no-aliasing 的定义！</p>
+<p>让我们看看文章开头的 Rust 例子会被编译成什么：</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">pub fn </span><span style="color:#8fa1b3;">compute</span><span>(</span><span style="color:#bf616a;">input</span><span>: &amp;</span><span style="color:#b48ead;">u32</span><span>, </span><span style="color:#bf616a;">output</span><span>: &amp;</span><span style="color:#b48ead;">mut u32</span><span>) {
+</span><span>    </span><span style="color:#b48ead;">if </span><span>*input &gt; </span><span style="color:#d08770;">10 </span><span>{
+</span><span>        *output = </span><span style="color:#d08770;">1</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#b48ead;">if </span><span>*input &gt; </span><span style="color:#d08770;">5 </span><span>{
+</span><span>        *output *= </span><span style="color:#d08770;">2</span><span>;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>编译结果 (<code>-C opt-level=3</code>)：</p>
+<pre data-lang="asm" style="background-color:#2b303b;color:#c0c5ce;" class="language-asm "><code class="language-asm" data-lang="asm"><span style="color:#8fa1b3;">compute:
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">ecx</span><span>, </span><span style="color:#96b5b4;">dword ptr </span><span>[</span><span style="color:#bf616a;">rdi</span><span>]</span><span style="color:#65737e;">    ; unsigned input_val = *arg0;  // 注意：只读取一次
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">2</span><span style="color:#65737e;">                  ; unsigned result = 2; // 优化：预先计算出 *input &gt; 10 时 *output = 2
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">ecx</span><span>, </span><span style="color:#d08770;">10</span><span style="color:#65737e;">                 ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ja      </span><span style="color:#8fa1b3;">.LBB0_3</span><span style="color:#65737e;">                 ; if (input_val &gt; 10) goto LBB0_3;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">ecx</span><span>, </span><span style="color:#d08770;">6</span><span style="color:#65737e;">                  ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jb      </span><span style="color:#8fa1b3;">.LBB0_4</span><span style="color:#65737e;">                 ; if (input_val &lt;= 5) return;  // 两个条件都不满足，什么也不做
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#96b5b4;">dword ptr </span><span>[</span><span style="color:#bf616a;">rsi</span><span>]</span><span style="color:#65737e;">    ; result = *arg1;              // 只满足第二个条件，乘2
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">add     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#bf616a;">eax</span><span style="color:#65737e;">                ; result *= 2;
+</span><span style="color:#8fa1b3;">.LBB0_3:</span><span style="color:#65737e;">                                ; LBB0_3:   // 如果 *input &gt; 10 会跳到这里
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#96b5b4;">dword ptr </span><span>[</span><span style="color:#bf616a;">rsi</span><span>], </span><span style="color:#bf616a;">eax</span><span style="color:#65737e;">    ; *arg1 = result;
+</span><span style="color:#8fa1b3;">.LBB0_4:</span><span style="color:#65737e;">                                ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                             ; return;
+</span></code></pre>
+<p>可以看到，<code>*input</code> 同样只被读取一次（第 1 行，保存在 <code>ecx</code> 中），编译器还预先将常量 <code>2</code> 加载到 <code>eax</code> 中（第 2 行），为 <code>*input &gt; 10</code> 的情况做准备。当 <code>*input &gt; 10</code> 时，会跳转到 <code>.LBB0_3</code> 直接写入这个预先准备好的值。这和带 <code>restrict</code> 的 C 版本采用了相似的优化策略。</p>
+<p>Rust 的借用规则让编译器确信 <code>input</code> 和 <code>output</code> 不会指向同一块内存，因此可以安全地进行激进优化。</p>
+<h3 id="luo-zhi-zhen-hui-dao-c-de-shi-jie">裸指针：回到 C 的世界</h3>
+<p>那么，如果我们绕过借用检查器，使用裸指针（raw pointer）呢？</p>
+<pre data-lang="rust" style="background-color:#2b303b;color:#c0c5ce;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">pub unsafe fn </span><span style="color:#8fa1b3;">compute_raw</span><span>(</span><span style="color:#bf616a;">input</span><span>: </span><span style="color:#b48ead;">*const u32</span><span>, </span><span style="color:#bf616a;">output</span><span>: </span><span style="color:#b48ead;">*mut u32</span><span>) {
+</span><span>    </span><span style="color:#b48ead;">if </span><span>*input &gt; </span><span style="color:#d08770;">10 </span><span>{
+</span><span>        *output = </span><span style="color:#d08770;">1</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#b48ead;">if </span><span>*input &gt; </span><span style="color:#d08770;">5 </span><span>{
+</span><span>        *output *= </span><span style="color:#d08770;">2</span><span>;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>编译结果 (<code>-C opt-level=3</code>)：</p>
+<pre data-lang="asm" style="background-color:#2b303b;color:#c0c5ce;" class="language-asm "><code class="language-asm" data-lang="asm"><span style="color:#8fa1b3;">compute_raw:
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#96b5b4;">dword ptr </span><span>[</span><span style="color:#bf616a;">rdi</span><span>]</span><span style="color:#65737e;">    ; unsigned temp = *arg0;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">11</span><span style="color:#65737e;">                 ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jae     </span><span style="color:#8fa1b3;">.LBB1_1</span><span style="color:#65737e;">                 ; if (temp &gt;= 11) goto LBB1_1;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">6</span><span style="color:#65737e;">                  ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jae     </span><span style="color:#8fa1b3;">.LBB1_3</span><span style="color:#65737e;">                 ; if (temp &gt;= 6) goto LBB1_3;
+</span><span style="color:#8fa1b3;">.LBB1_4:</span><span style="color:#65737e;">                                ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                             ; return;
+</span><span style="color:#8fa1b3;">.LBB1_1:</span><span style="color:#65737e;">                                ; LBB1_1:  // temp &gt; 10 会跳到这里
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#96b5b4;">dword ptr </span><span>[</span><span style="color:#bf616a;">rsi</span><span>], </span><span style="color:#d08770;">1</span><span style="color:#65737e;">      ; *arg1 = 1;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#96b5b4;">dword ptr </span><span>[</span><span style="color:#bf616a;">rdi</span><span>]</span><span style="color:#65737e;">    ; temp = *arg0;  // 注意：重新读取内存值
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">cmp     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">6</span><span style="color:#65737e;">                  ; 
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">jb      </span><span style="color:#8fa1b3;">.LBB1_4</span><span style="color:#65737e;">                 ; if (temp &lt;= 5) return;
+</span><span style="color:#8fa1b3;">.LBB1_3:</span><span style="color:#65737e;">                                ; LBB1_3:  // temp &gt; 5 会跳到这里
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">shl     </span><span style="color:#96b5b4;">dword ptr </span><span>[</span><span style="color:#bf616a;">rsi</span><span>]</span><span style="color:#65737e;">         ; *arg1 &lt;&lt;= 1;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                             ; return;
+</span></code></pre>
+<p>可以看到，在 <code>.LBB1_1</code> 分支中，<code>*input</code> 被读取了两次（第 1 行和第 10 行，都是 <code>mov eax, dword ptr [rdi]</code>）。这和不带 <code>restrict</code> 的 C 版本的行为一致：编译器必须在写入 <code>*output = 1</code> 之后重新读取 <code>*input</code>，因为它不能确定两个指针是否指向同一块内存。</p>
+<p>这说明：<strong>Rust 对裸指针没有 aliasing 假设</strong>。编译器会保守地认为两个裸指针可能指向同一块内存。这是合理的，因为裸指针绕过了借用检查器，编译器无法保证它们的关系。</p>
+<h3 id="borrow-rules-qiang-hua-de-aliasing-rules">Borrow Rules = 强化的 Aliasing Rules</h3>
+<p>通过对比可以看出：</p>
+<table><thead><tr><th>语言/方式</th><th>Aliasing 保证</th><th>编译器优化</th></tr></thead><tbody>
+<tr><td>C（普通指针）</td><td>❌ 可能有 alias</td><td>保守</td></tr>
+<tr><td>C（restrict）</td><td>✅ 程序员承诺 no-alias</td><td>激进</td></tr>
+<tr><td>Rust（引用）</td><td>✅ 编译器强制 no-alias</td><td>激进</td></tr>
+<tr><td>Rust（裸指针）</td><td>❌ 可能有 alias</td><td>保守</td></tr>
+</tbody></table>
+<p>Rust 的借用规则本质上是一种<strong>编译器强制执行的 aliasing rule</strong>。它比 C 的 <code>restrict</code> 更强大，因为：</p>
+<ol>
+<li><strong>静态检查</strong>：违反规则会在编译时被发现，而不是运行时未定义行为</li>
+<li><strong>自动推导</strong>：编译器自动知道引用满足 no-alias，不需要程序员手动标注</li>
+<li><strong>全局保证</strong>：规则在整个程序中强制执行，而 <code>restrict</code> 只是局部承诺</li>
+</ol>
+<p>这就是为什么 Rust 的 borrow checker 不仅保证了内存安全，还能带来性能优势——它为编译器提供了更多的优化信息。</p>
+<h2 id="rust-reference-zen-me-xie-de">Rust Reference 怎么写的？</h2>
+<p>Rust 官方文档在 <a href="https://doc.rust-lang.org/reference/behavior-considered-undefined.html#r-undefined.alias">Undefined Behavior</a> 一节中明确列出了关于 aliasing 的规则。</p>
+<p>值得注意的是，<strong>Rust 的 pointer aliasing rule 仍在演进中</strong>。目前 Rust 团队正在通过 <a href="https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md">Stacked Borrows</a> 和 <a href="https://perso.crans.org/vanille/treebor/">Tree Borrows</a> 等模型来形式化这些规则。</p>
+<p>但对于涉及<strong>引用</strong>的情况，规则是明确的：</p>
+<blockquote>
+<p><strong>产生以下情况的引用是未定义行为：</strong></p>
+<ul>
+<li>一个可变引用（<code>&amp;mut T</code>）与任何其他指向相同内存的引用（无论可变或不可变）同时存活</li>
+<li>一个不可变引用（<code>&amp;T</code>）与指向相同内存的可变引用同时存活</li>
+</ul>
+</blockquote>
+<p>这些规则确保了：</p>
+<ol>
+<li><strong>独占性</strong>：<code>&amp;mut T</code> 保证独占访问，编译器可以假设没有其他路径访问这块内存</li>
+<li><strong>不变性</strong>：<code>&amp;T</code> 保证数据不会被修改，编译器可以缓存读取的值</li>
+</ol>
+<p>编译器正是基于这些保证来进行优化的。违反这些规则（通常通过 <code>unsafe</code> 代码）会导致未定义行为，编译器生成的优化代码可能产生意外结果。</p>
+<h2 id="ti-wai-hua-c-de-strict-aliasing-rule">题外话：C++ 的 Strict Aliasing Rule</h2>
+<p>C++ 还有另一种形式的 aliasing rule，称为 <strong>strict aliasing rule</strong>（严格别名规则）。它关注的是<strong>类型</strong>而不是指针本身。</p>
+<p>简单来说，C++ 的 strict aliasing rule 规定：<strong>编译器可以假设不同类型的指针不会指向重叠的内存</strong>（除了一些例外，如 <code>char*</code> 可以指向任何类型）。</p>
+<p>看一个具体的例子：</p>
+<pre data-lang="cpp" style="background-color:#2b303b;color:#c0c5ce;" class="language-cpp "><code class="language-cpp" data-lang="cpp"><span style="color:#b48ead;">int </span><span style="color:#8fa1b3;">get_value</span><span>(</span><span style="color:#b48ead;">int </span><span>*</span><span style="color:#bf616a;">p</span><span>, </span><span style="color:#b48ead;">float </span><span>*</span><span style="color:#bf616a;">q</span><span>) {
+</span><span>    *p = </span><span style="color:#d08770;">42</span><span>;
+</span><span>    *q = </span><span style="color:#d08770;">3.14</span><span style="color:#b48ead;">f</span><span>;
+</span><span>    </span><span style="color:#b48ead;">return </span><span>*p;
+</span><span>}
+</span></code></pre>
+<p>直觉上，如果 <code>p</code> 和 <code>q</code> 指向同一块内存，这个函数应该返回 <code>3.14f</code> 的位表示（一个整数，通常是 <code>1078523331</code>）。但实际上，编译器会基于 strict aliasing rule 进行优化：</p>
+<pre data-lang="asm" style="background-color:#2b303b;color:#c0c5ce;" class="language-asm "><code class="language-asm" data-lang="asm"><span style="color:#8fa1b3;">get_value:
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rdi</span><span>], </span><span style="color:#d08770;">42</span><span style="color:#65737e;">         ; *arg0 = 42;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#bf616a;">eax</span><span>, </span><span style="color:#d08770;">42</span><span style="color:#65737e;">                     ; int temp = 42;
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">mov     </span><span style="color:#96b5b4;">DWORD PTR </span><span>[</span><span style="color:#bf616a;">rsi</span><span>], </span><span style="color:#d08770;">0x4048f5c3</span><span style="color:#65737e;"> ; *arg1 = 3.14000010f
+</span><span style="color:#8fa1b3;">        </span><span style="color:#b48ead;">ret</span><span style="color:#65737e;">                                 ; return temp;  // 这里编译器返回了42，而没有重新取arg0指向的值
+</span></code></pre>
+<p>注意最后一行：编译器<strong>直接返回常量 <code>42</code></strong>，而不是重新读取 <code>*p</code> 的值。因为编译器假设 <code>int*</code> 和 <code>float*</code> 不会指向同一块内存，所以认为 <code>*q = 3.14f</code> 不会影响 <code>*p</code> 的值。</p>
+<p>如果我们真的让 <code>p</code> 和 <code>q</code> 指向同一块内存：</p>
+<pre data-lang="cpp" style="background-color:#2b303b;color:#c0c5ce;" class="language-cpp "><code class="language-cpp" data-lang="cpp"><span style="color:#b48ead;">int</span><span> value = </span><span style="color:#d08770;">0</span><span>;
+</span><span style="color:#b48ead;">int</span><span> result = </span><span style="color:#bf616a;">get_value</span><span>(&amp;value, reinterpret_cast&lt;</span><span style="color:#b48ead;">float</span><span>*&gt;(&amp;value));
+</span><span style="color:#65737e;">// result == 42，而不是 3.14f 的位表示！
+</span><span style="color:#65737e;">// value 的内存中存储的是 3.14f 的位表示，但函数返回了 42
+</span></code></pre>
+<p>这是一个违反直觉的结果：内存中的值已经被改变了，但函数返回的却是旧值。这就是 strict aliasing rule 导致的未定义行为——编译器的优化假设被违反了。</p>
+<p>这是一种基于<strong>类型的 aliasing rule</strong>，与我们之前讨论的基于<strong>可变性和独占性的 aliasing rule</strong>（Rust/C restrict）不同。两者的目标都是给编译器更多优化空间，但约束的角度不同：</p>
+<ul>
+<li><strong>C/Rust 的 restrict/borrow</strong>：关注同一类型的多个指针是否重叠</li>
+<li><strong>C++ 的 strict aliasing</strong>：关注不同类型的指针是否重叠</li>
+</ul>
+<p>Rust 也有类似的规则（不同类型的引用不应指向同一内存），但由于 Rust 的类型系统和借用检查器的限制，在安全代码中很难违反这个规则。</p>
+<h2 id="zong-jie">总结</h2>
+<p>通过从 C 语言的 <code>restrict</code> 关键字出发，我们理解了 aliasing 对编译器优化的影响：</p>
+<ol>
+<li><strong>Aliasing 是性能杀手</strong>：当编译器不确定两个指针是否重叠时，必须生成保守的代码</li>
+<li><strong>C 的 <code>restrict</code></strong>：程序员手动承诺 no-alias，但没有编译时检查</li>
+<li><strong>Rust 的引用</strong>：编译器通过借用规则强制保证 no-alias，自动获得优化</li>
+<li><strong>Rust 的裸指针</strong>：和 C 的普通指针一样，编译器保守处理</li>
+</ol>
+<p>Rust 的借用检查器本质上是<strong>把 aliasing rule 编码到类型系统中</strong>，在保证内存安全的同时，也为编译器提供了丰富的优化信息。这是 Rust "零成本抽象"理念的一个完美体现：安全的代码也是高效的代码。</p>
+<hr />
+<p><strong>参考资料</strong>：</p>
+<ul>
+<li><a href="https://doc.rust-lang.org/reference/behavior-considered-undefined.html">Rust Reference: Behavior considered undefined</a></li>
+<li><a href="https://doc.rust-lang.org/nomicon/aliasing.html">The Rustonomicon: Aliasing</a></li>
+<li><a href="https://en.cppreference.com/w/c/language/restrict">C99 Standard: The restrict type qualifier</a></li>
+<li><a href="https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md">Stacked Borrows: An Aliasing Model For Rust</a></li>
+</ul>
+</section>
+
+  <hr />
+
+  <!-- Post Taxonomies -->
+  
+<footer class="mt-12 flex flex-col">
+  <!---->
+  <!---->
+  <!---->
+  <!---->
+  <!---->
+  <!---->
+  
+  <div class="mb-2 flex flex-wrap">
+    <span class="block-bg mr-1.5 mb-1.5 rounded-lg px-5 py-1.5">Categories </span>
+    
+    <a
+      class="block-bg block-hover mr-1.5 mb-1.5 rounded-lg px-5 py-1.5 no-underline"
+      href="https://sudoytang.github.io/categories/jiao-cheng-bi-ji/"
+      >教程&#x2F;笔记</a
+    >
+    
+  </div>
+  
+  <div class="mb-2 flex flex-wrap">
+    <span class="block-bg mr-1.5 mb-1.5 rounded-lg px-5 py-1.5">Tags </span>
+    
+    <a
+      class="block-bg block-hover mr-1.5 mb-1.5 rounded-lg px-5 py-1.5 no-underline"
+      href="https://sudoytang.github.io/tags/rust/"
+      >Rust</a
+    >
+    
+    <a
+      class="block-bg block-hover mr-1.5 mb-1.5 rounded-lg px-5 py-1.5 no-underline"
+      href="https://sudoytang.github.io/tags/bian-yi-you-hua/"
+      >编译优化</a
+    >
+    
+    <a
+      class="block-bg block-hover mr-1.5 mb-1.5 rounded-lg px-5 py-1.5 no-underline"
+      href="https://sudoytang.github.io/tags/memory-aliasing/"
+      >Memory Aliasing</a
+    >
+    
+  </div>
+  
+</footer>
+
+<!---->
+
+  <!-- Post Nav -->
+  
+<nav class="block-bg mt-12 flex flex-wrap rounded-lg text-lg">
+  
+  <a
+    class="block-hover-mask flex min-w-[50%] grow items-center rounded-l-md p-6 pr-3 font-semibold no-underline"
+    href="https:&#x2F;&#x2F;sudoytang.github.io&#x2F;rust-async-chapter-00-intro&#x2F;"
+    ><span class="mr-1.5">←</span><span>手写Rust异步执行器 第0章：入门</span></a
+  >
+  <!---->
+  
+</nav>
+
+<!---->
+
+  <!-- Comment -->
+  
+
+  <!-- Page End inject -->
+  
+</article>
+
+    </main>
+
+    <footer class="mx-auto flex max-w-3xl flex-wrap items-center px-8 py-4 text-sm opacity-60">
+  <div class="mr-auto basis-full lg:basis-1/2">
+    <!---->
+    <!---->
+    &copy; 2025<!---->
+    
+    <a class="link" href="https://sudoytang.github.io">
+      
+    </a>
+    
+  </div>
+  <div class="flex basis-full lg:basis-1/2 lg:justify-end">
+    <a class="link mr-6 lg:ml-6" href="https://www.getzola.org/" rel="noopener" target="_blank">
+      Powered by Zola
+    </a>
+    <a class="link" href="https://github.com/st1020/kita" rel="noopener" target="_blank">✎ Kita</a>
+  </div>
+  <!-- Footer inject -->
+  
+</footer>
+
+
+    <!-- Body End inject -->
+    
+  </body>
+</html>

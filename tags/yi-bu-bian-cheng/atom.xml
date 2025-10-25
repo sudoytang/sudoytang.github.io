@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+    <title> - 异步编程</title>
+    <link rel="self" type="application/atom+xml" href="https://sudoytang.github.io/tags/yi-bu-bian-cheng/atom.xml"/>
+    <link rel="alternate" type="text/html" href="https://sudoytang.github.io/"/>
+    <generator uri="https://www.getzola.org/">Zola</generator>
+    <updated>2025-10-21T00:00:00+00:00</updated>
+    <id>https://sudoytang.github.io/tags/yi-bu-bian-cheng/atom.xml</id>
+    <entry xml:lang="en">
+        <title>手写Rust异步执行器 第0章：入门</title>
+        <published>2025-10-21T00:00:00+00:00</published>
+        <updated>2025-10-21T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://sudoytang.github.io/rust-async-chapter-00-intro/"/>
+        <id>https://sudoytang.github.io/rust-async-chapter-00-intro/</id>
+        
+        <content type="html" xml:base="https://sudoytang.github.io/rust-async-chapter-00-intro/">&lt;h2 id=&quot;qian-yan&quot;&gt;前言&lt;&#x2F;h2&gt;
+&lt;p&gt;虽然我在近几年写的代码几乎都是同步的，但是最近在学习Rust的过程中，得益于Rust的并发模型很好地规避了初学者在使用时容易踩的坑，因此我也对并发编程有了一定的了解。Rust的并发编程除了多进程和多线程外，还有一套异步编程模型。我尝试过使用 Tokio 这样的异步运行时，但对它们的内部机制始终是一知半解。为了真正理解 Rust 异步编程的底层原理，我决定从零开始实现一个学习性质的异步运行时。它的目标不是打造一个生产级的运行时，而是通过动手实践来深入理解 Future、Waker、Executor 这些概念是如何协同工作的。&lt;&#x2F;p&gt;
+&lt;p&gt;本系列笔记记录了我在这个过程中的学习和思考。&lt;&#x2F;p&gt;
+&lt;p&gt;在开始动手实现之前，先梳理一下异步编程的基本概念：它是什么、为什么需要它、以及它和多线程的区别。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;shen-me-shi-yi-bu-bian-cheng&quot;&gt;什么是异步编程？&lt;&#x2F;h2&gt;
+&lt;p&gt;简单来说，异步编程就是一种&lt;strong&gt;让程序在等待某些操作完成的时候，不傻站着干等，而是去做点别的事情&lt;&#x2F;strong&gt;的编程方式。&lt;&#x2F;p&gt;
+&lt;p&gt;举个生活中的例子，煮饭的场景：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;同步方式&lt;&#x2F;strong&gt;：把米放进电饭煲，然后站在那里盯着它煮熟（30分钟），什么都不干。煮好了，再去烧菜（15分钟），烧好了再去煮汤（10分钟）。总共需要 55 分钟。&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;异步方式&lt;&#x2F;strong&gt;：把米放进电饭煲，设好定时器，然后去烧菜。烧菜的同时电饭煲在工作。烧完菜再去煮汤。饭、菜、汤可能在 30-35 分钟内全部完成。&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;异步编程的核心思想就是：&lt;strong&gt;不要浪费等待的时间&lt;&#x2F;strong&gt;。&lt;&#x2F;p&gt;
+&lt;p&gt;在计算机程序中，有大量的操作需要&quot;等待&quot;：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;从网络读取数据（等待网卡）&lt;&#x2F;li&gt;
+&lt;li&gt;从磁盘读取文件（等待硬盘）&lt;&#x2F;li&gt;
+&lt;li&gt;等待用户输入（等待用户）&lt;&#x2F;li&gt;
+&lt;li&gt;等待数据库查询结果（等待数据库服务器）&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;这些操作的共同特点是：&lt;strong&gt;CPU 实际上是空闲的，它只是在等外部设备或系统完成工作&lt;&#x2F;strong&gt;。如果能在等待的时候去处理其他任务，程序的效率就会大大提高。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;yi-bu-bing-fa-yu-duo-xian-cheng-wei-shen-me-xuan-ze-yi-bu&quot;&gt;异步并发与多线程：为什么选择异步？&lt;&#x2F;h2&gt;
+&lt;p&gt;在并发编程中，有两种主要的实现方式：多线程和异步。它们经常被混淆，但有着本质的区别。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;duo-xian-cheng-parallel-concurrent&quot;&gt;多线程（Parallel&#x2F;Concurrent）&lt;&#x2F;h3&gt;
+&lt;p&gt;在多核系统上：&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;线程 1: [==任务A==]     [==任务C==]
+&lt;&#x2F;span&gt;&lt;span&gt;线程 2:     [==任务B==]     [==任务D==]
+&lt;&#x2F;span&gt;&lt;span&gt;        |----时间线----&amp;gt;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;在单核系统上：&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;线程 1: [==任务A==][被抢占]  [==任务A继续==][被抢占]
+&lt;&#x2F;span&gt;&lt;span&gt;线程 2:          [==任务B==]            [==任务B继续==]
+&lt;&#x2F;span&gt;&lt;span&gt;        |----时间线----&amp;gt;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;strong&gt;特点：&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;(可能)真正的并行&lt;&#x2F;strong&gt;：在多核 CPU 上，多个线程可以同时执行；在单核上则是操作系统快速切换造成的&quot;并发&quot;假象&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;抢占式调度&lt;&#x2F;strong&gt;：操作系统决定什么时候切换线程，程序无法控制&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;高开销&lt;&#x2F;strong&gt;：每个线程有独立的栈（通常 1-2MB），上下文切换代价高&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;适用场景&lt;&#x2F;strong&gt;：CPU 密集型任务，需要利用多核心进行计算&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h3 id=&quot;yi-bu-bing-fa-concurrent&quot;&gt;异步并发（Concurrent）&lt;&#x2F;h3&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;线程 1: [任务A-等待][任务B-等待][任务C-等待][任务A-继续][任务B-继续]
+&lt;&#x2F;span&gt;&lt;span&gt;        |----时间线----&amp;gt;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;strong&gt;特点：&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;单线程也能并发&lt;&#x2F;strong&gt;：通过任务切换实现，无需多核支持&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;协作式调度&lt;&#x2F;strong&gt;：任务主动让出控制权（在 await 点），执行流程可预测&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;低开销&lt;&#x2F;strong&gt;：任务是轻量级的状态机（通常几 KB），切换成本低&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;适用场景&lt;&#x2F;strong&gt;：I&#x2F;O 密集型任务，大量等待操作&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h3 id=&quot;wei-shen-me-xuan-ze-yi-bu&quot;&gt;为什么选择异步？&lt;&#x2F;h3&gt;
+&lt;p&gt;考虑一个实际场景：一个 Web 服务器需要同时处理 10,000 个客户端连接。&lt;&#x2F;p&gt;
+&lt;p&gt;早期的服务器架构会为每个连接创建一个进程或线程，但在面对上万并发连接时会遇到严重的性能瓶颈，这被称为 &lt;a href=&quot;https:&#x2F;&#x2F;en.wikipedia.org&#x2F;wiki&#x2F;C10k_problem&quot;&gt;C10K 问题&lt;&#x2F;a&gt;。&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;多线程方案的问题&lt;&#x2F;strong&gt;：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;10,000 个线程 = 至少 10GB 内存（每个线程栈空间约 1-2MB）&lt;&#x2F;li&gt;
+&lt;li&gt;操作系统在这么多线程间切换会产生巨大开销&lt;&#x2F;li&gt;
+&lt;li&gt;大部分线程其实在休眠等待（等待客户端发送数据、等待数据库响应等），造成资源浪费&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;&lt;strong&gt;异步方案的优势&lt;&#x2F;strong&gt;：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;只需要 4-8 个工作线程（对应 CPU 核心数）&lt;&#x2F;li&gt;
+&lt;li&gt;10,000 个异步任务可能只占几十 MB 内存&lt;&#x2F;li&gt;
+&lt;li&gt;任务在 I&#x2F;O 等待时主动让出 CPU，几乎没有资源浪费&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;异步 I&#x2F;O 模型（配合 epoll、kqueue 等系统调用）是解决 C10K 问题的关键技术之一。现代的高性能服务器（如 Nginx、Node.js）都采用了这种模型。这就是为什么 Tokio、async-std 这样的异步运行时能让 Rust 在高并发场景下表现出色。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;liang-zhe-de-jie-he-zui-jia-shi-jian&quot;&gt;两者的结合：最佳实践&lt;&#x2F;h3&gt;
+&lt;p&gt;&lt;strong&gt;异步和多线程不是对立的。&lt;&#x2F;strong&gt; 现代异步运行时（如 Tokio）通常会结合两者，用多个工作线程来利用多核 CPU，并在每个线程上运行大量异步任务。这样既能享受多核并行的性能，又能用异步来高效处理大量 I&#x2F;O 操作。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;rust-de-yi-bu-mo-xing&quot;&gt;Rust 的异步模型&lt;&#x2F;h2&gt;
+&lt;p&gt;Rust 的异步是基于 &lt;strong&gt;Future&lt;&#x2F;strong&gt; 和 &lt;strong&gt;polling&lt;&#x2F;strong&gt; 模型的。理解这几个核心概念是实现异步运行时的基础。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;future-wei-lai-de-ji-suan&quot;&gt;Future：未来的计算&lt;&#x2F;h3&gt;
+&lt;p&gt;&lt;code&gt;Future&lt;&#x2F;code&gt; 是 Rust 异步编程的核心 trait：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;pub trait &lt;&#x2F;span&gt;&lt;span&gt;Future {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;type &lt;&#x2F;span&gt;&lt;span&gt;Output;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;poll&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;self&lt;&#x2F;span&gt;&lt;span&gt;: Pin&amp;lt;&amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mut Self&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;cx&lt;&#x2F;span&gt;&lt;span&gt;: &amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mut &lt;&#x2F;span&gt;&lt;span&gt;Context&amp;lt;&amp;#39;_&amp;gt;) -&amp;gt; Poll&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Self::&lt;&#x2F;span&gt;&lt;span&gt;Output&amp;gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;code&gt;Future&lt;&#x2F;code&gt; 代表一个&quot;未来会产生结果&quot;的计算。它不会自动执行，必须有人去驱动它。&lt;&#x2F;p&gt;
+&lt;p&gt;当我们写 &lt;code&gt;async fn&lt;&#x2F;code&gt; 或 &lt;code&gt;async {}&lt;&#x2F;code&gt; 块时，编译器会生成一个实现了 &lt;code&gt;Future&lt;&#x2F;code&gt; trait 的状态机。例如：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;async &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;fetch_data&lt;&#x2F;span&gt;&lt;span&gt;() -&amp;gt; String {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; ... async operations
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;这会被编译器转换成类似这样的结构：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;struct &lt;&#x2F;span&gt;&lt;span&gt;FetchDataFuture {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;state&lt;&#x2F;span&gt;&lt;span&gt;: State &lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;* private, implementation-defined *&#x2F;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; ... Other fields
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;impl &lt;&#x2F;span&gt;&lt;span&gt;Future &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;for &lt;&#x2F;span&gt;&lt;span&gt;FetchDataFuture {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;type &lt;&#x2F;span&gt;&lt;span&gt;Output = String;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;poll&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;self&lt;&#x2F;span&gt;&lt;span&gt;: Pin&amp;lt;&amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mut Self&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;cx&lt;&#x2F;span&gt;&lt;span&gt;: &amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mut &lt;&#x2F;span&gt;&lt;span&gt;Context&amp;lt;&amp;#39;_&amp;gt;) -&amp;gt; Poll&amp;lt;String&amp;gt; {
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; State machine logic
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;blockquote&gt;
+&lt;p&gt;&lt;strong&gt;TODO&lt;&#x2F;strong&gt;：关于为什么 &lt;code&gt;poll&lt;&#x2F;code&gt; 的第一个参数是 &lt;code&gt;Pin&amp;lt;&amp;amp;mut Self&amp;gt;&lt;&#x2F;code&gt; 而不是 &lt;code&gt;&amp;amp;mut self&lt;&#x2F;code&gt;，涉及到 Rust 的 &lt;code&gt;Pin&lt;&#x2F;code&gt; 机制和自引用结构的问题。这个话题比较复杂，计划在后续单独写一篇文章详细说明。&lt;&#x2F;p&gt;
+&lt;&#x2F;blockquote&gt;
+&lt;h3 id=&quot;poll-lun-xun-jie-guo&quot;&gt;Poll：轮询结果&lt;&#x2F;h3&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;pub enum &lt;&#x2F;span&gt;&lt;span&gt;Poll&amp;lt;T&amp;gt; {
+&lt;&#x2F;span&gt;&lt;span&gt;    Ready(T),
+&lt;&#x2F;span&gt;&lt;span&gt;    Pending,
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;code&gt;Poll&lt;&#x2F;code&gt; 是一个简单的枚举，表示 Future 的状态：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;Poll::Pending&lt;&#x2F;code&gt;：Future 还没完成，现在无法产生结果&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;Poll::Ready(value)&lt;&#x2F;code&gt;：Future 已完成，这是最终结果&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;这是一个基于&quot;拉取&quot;（pull）的模型：执行器主动来问 Future&quot;完成了吗？&quot;，而不是 Future 主动推送结果。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;executor-zhi-xing-qi&quot;&gt;Executor：执行器&lt;&#x2F;h3&gt;
+&lt;p&gt;执行器（Executor）负责驱动 Future 的执行。它的核心职责是：&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;持有一个或多个 Future&lt;&#x2F;li&gt;
+&lt;li&gt;反复调用它们的 &lt;code&gt;poll&lt;&#x2F;code&gt; 方法&lt;&#x2F;li&gt;
+&lt;li&gt;当所有 Future 都完成时，执行器的工作也就结束了&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;一个最简单的执行器可能长这样：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;simple_executor&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;F: Future&amp;gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mut &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;future&lt;&#x2F;span&gt;&lt;span&gt;: F) -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;F::&lt;&#x2F;span&gt;&lt;span&gt;Output {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;loop &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;match&lt;&#x2F;span&gt;&lt;span&gt; future.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;poll&lt;&#x2F;span&gt;&lt;span&gt;(...) {
+&lt;&#x2F;span&gt;&lt;span&gt;            Poll::Ready(result) =&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return&lt;&#x2F;span&gt;&lt;span&gt; result,
+&lt;&#x2F;span&gt;&lt;span&gt;            Poll::Pending =&amp;gt; {
+&lt;&#x2F;span&gt;&lt;span&gt;                &lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; 等待一会儿再试
+&lt;&#x2F;span&gt;&lt;span&gt;            }
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;当然，真实的执行器要复杂得多：需要处理多个任务、任务调度、优先级等等。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;waker-huan-xing-ji-zhi&quot;&gt;Waker：唤醒机制&lt;&#x2F;h3&gt;
+&lt;p&gt;如果执行器只是盲目地反复调用 &lt;code&gt;poll&lt;&#x2F;code&gt;，那效率会很低——大部分时候 Future 都返回 &lt;code&gt;Pending&lt;&#x2F;code&gt;，这和忙等待（busy waiting）没什么区别。&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;code&gt;Waker&lt;&#x2F;code&gt; 机制解决了这个问题。它让 Future 能够告诉执行器：&quot;当我准备好继续执行时，我会通知你&quot;。&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;code&gt;Waker&lt;&#x2F;code&gt; 的工作流程：&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;执行器在调用 &lt;code&gt;poll&lt;&#x2F;code&gt; 时，通过 &lt;code&gt;Context&lt;&#x2F;code&gt; 传递一个 &lt;code&gt;Waker&lt;&#x2F;code&gt; 给 Future&lt;&#x2F;li&gt;
+&lt;li&gt;如果 Future 返回 &lt;code&gt;Pending&lt;&#x2F;code&gt;，它会把这个 &lt;code&gt;Waker&lt;&#x2F;code&gt; 保存起来&lt;&#x2F;li&gt;
+&lt;li&gt;当 Future 准备好继续执行时（比如 I&#x2F;O 完成了），它调用 &lt;code&gt;waker.wake()&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;执行器收到唤醒通知，知道该再次 &lt;code&gt;poll&lt;&#x2F;code&gt; 这个 Future 了&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;这样，执行器就不需要盲目轮询，而是可以休眠等待，直到有任务需要处理。这大大提高了效率。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;zheng-ti-liu-cheng&quot;&gt;整体流程&lt;&#x2F;h3&gt;
+&lt;p&gt;把这些概念串起来：&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;用户编写 &lt;code&gt;async&lt;&#x2F;code&gt; 代码，编译器生成 &lt;code&gt;Future&lt;&#x2F;code&gt; 状态机&lt;&#x2F;li&gt;
+&lt;li&gt;用户把 Future 交给 &lt;code&gt;Executor&lt;&#x2F;code&gt; 执行&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;Executor&lt;&#x2F;code&gt; 调用 &lt;code&gt;Future::poll()&lt;&#x2F;code&gt;，传入包含 &lt;code&gt;Waker&lt;&#x2F;code&gt; 的 &lt;code&gt;Context&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;如果 &lt;code&gt;Future&lt;&#x2F;code&gt; 返回 &lt;code&gt;Ready&lt;&#x2F;code&gt;，任务完成&lt;&#x2F;li&gt;
+&lt;li&gt;如果 &lt;code&gt;Future&lt;&#x2F;code&gt; 返回 &lt;code&gt;Pending&lt;&#x2F;code&gt;，它会在适当的时机调用 &lt;code&gt;Waker::wake()&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;Executor&lt;&#x2F;code&gt; 收到唤醒通知，再次调用 &lt;code&gt;poll()&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;重复步骤 3-6，直到任务完成&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;这就是 Rust 异步运行时的核心机制！接下来，我们将通过实现来深入理解这些概念。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;hou-xu-ji-hua&quot;&gt;后续计划&lt;&#x2F;h2&gt;
+&lt;p&gt;从零开始实现一个教学用的异步运行时，计划逐步实现：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;最简单的执行器（忙等待循环）&lt;&#x2F;li&gt;
+&lt;li&gt;Waker 机制（高效的任务唤醒）&lt;&#x2F;li&gt;
+&lt;li&gt;多任务调度&lt;&#x2F;li&gt;
+&lt;li&gt;Timer、Channel、Mutex 等异步原语&lt;&#x2F;li&gt;
+&lt;li&gt;多线程执行器&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;第一章将从最简单的执行器开始。&lt;&#x2F;p&gt;
+&lt;hr &#x2F;&gt;
+&lt;p&gt;&lt;strong&gt;注&lt;&#x2F;strong&gt;：在实际编写代码的过程中，这些抽象概念会变得更加具体。许多细节在动手实践后会自然理解。&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+</feed>

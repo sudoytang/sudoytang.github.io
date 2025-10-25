@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+    <title> - 编译优化</title>
+    <link rel="self" type="application/atom+xml" href="https://sudoytang.github.io/tags/bian-yi-you-hua/atom.xml"/>
+    <link rel="alternate" type="text/html" href="https://sudoytang.github.io/"/>
+    <generator uri="https://www.getzola.org/">Zola</generator>
+    <updated>2025-10-24T00:00:00+00:00</updated>
+    <id>https://sudoytang.github.io/tags/bian-yi-you-hua/atom.xml</id>
+    <entry xml:lang="en">
+        <title>从C语言理解Rust Aliasing Rule</title>
+        <published>2025-10-24T00:00:00+00:00</published>
+        <updated>2025-10-24T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://sudoytang.github.io/rust-aliasing-rules/"/>
+        <id>https://sudoytang.github.io/rust-aliasing-rules/</id>
+        
+        <content type="html" xml:base="https://sudoytang.github.io/rust-aliasing-rules/">&lt;h2 id=&quot;qian-yan&quot;&gt;前言&lt;&#x2F;h2&gt;
+&lt;p&gt;在学习 Rust 的过程中，我们经常听说 Rust 的借用检查器（borrow checker）不仅保证了内存安全，还能帮助编译器做出更激进的优化。
+Prof. Baochun Li 在 ECE 1724 Rust 课程的《Lifetimes》Lecture 中提到了 Aliasing，并举了以下例子：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;input&lt;&#x2F;span&gt;&lt;span&gt;: &amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;output&lt;&#x2F;span&gt;&lt;span&gt;: &amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mut u32&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        *output = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;5 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        *output *= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; `*output` will be `2` if `input &amp;gt; 10`
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;他从可优化性的角度解释了 aliasing 假设对编译优化的影响。然而，对于被 borrow checker 保护得太好的 Rust 使用者来说，这段代码的可优化性似乎是理所当然的——毕竟借用规则不允许同时存在可变引用和不可变引用。这反而让人有点摸不着头脑：这和优化有什么关系？&lt;&#x2F;p&gt;
+&lt;p&gt;要真正理解这个问题，我们需要回到 C 语言，看看在没有借用检查的世界里，编译器面临着怎样的困境。本文将从 C 语言的 aliasing 问题出发，逐步理解 Rust 的 aliasing rule 为编译器带来的价值。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;cyu-yan-zhong-de-aliasing-rule&quot;&gt;C语言中的 Aliasing Rule&lt;&#x2F;h2&gt;
+&lt;h3 id=&quot;shen-me-shi-aliasing&quot;&gt;什么是 Aliasing？&lt;&#x2F;h3&gt;
+&lt;p&gt;&lt;strong&gt;Aliasing（别名）&lt;&#x2F;strong&gt; 指的是两个或多个指针指向同一块内存区域的情况。当函数接收多个指针参数时，因为这些指针可能来自任何地方，编译器通常无法确定这些指针是否会指向重叠的内存，这就是 &lt;strong&gt;pointer aliasing problem&lt;&#x2F;strong&gt;。&lt;&#x2F;p&gt;
+&lt;p&gt;一个经典的例子是 C 标准库中的 &lt;code&gt;memcpy&lt;&#x2F;code&gt; 和 &lt;code&gt;memmove&lt;&#x2F;code&gt;：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;c&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-c &quot;&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;void &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;memcpy&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;void &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;restrict &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;dest&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;const void &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;restrict &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;src&lt;&#x2F;span&gt;&lt;span&gt;, size_t &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;n&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;void &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;memmove&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;void &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;dest&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;const void &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;src&lt;&#x2F;span&gt;&lt;span&gt;, size_t &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;n&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;注意到它们的函数签名有一个关键区别：&lt;code&gt;memcpy&lt;&#x2F;code&gt; 的参数带有 &lt;code&gt;restrict&lt;&#x2F;code&gt; 关键字，而 &lt;code&gt;memmove&lt;&#x2F;code&gt; 没有。&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;memcpy&lt;&#x2F;code&gt;&lt;&#x2F;strong&gt;：假设源和目标内存区域&lt;strong&gt;不重叠&lt;&#x2F;strong&gt;（no-alias），可以做激进优化（如并行拷贝、向量化）&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;memmove&lt;&#x2F;code&gt;&lt;&#x2F;strong&gt;：允许源和目标内存区域&lt;strong&gt;重叠&lt;&#x2F;strong&gt;（may-alias），必须小心处理拷贝顺序&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;这两个函数存在的原因正是因为 aliasing 的情况不同，需要不同的实现策略。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;yi-ge-ju-ti-de-li-zi&quot;&gt;一个具体的例子&lt;&#x2F;h3&gt;
+&lt;p&gt;让我们把前面的 Rust 例子翻译成 C 语言，看看编译器会生成什么样的代码：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;c&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-c &quot;&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; 版本1：不带 restrict
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;void &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;const unsigned int &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;input&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;unsigned int &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;output&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;(*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;        *output = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;(*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;5&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;        *output *= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;在这个版本中，编译器&lt;strong&gt;不知道&lt;&#x2F;strong&gt; &lt;code&gt;input&lt;&#x2F;code&gt; 和 &lt;code&gt;output&lt;&#x2F;code&gt; 是否指向同一块内存。因此它必须保守地假设它们&lt;strong&gt;可能&lt;&#x2F;strong&gt;指向同一地址。&lt;&#x2F;p&gt;
+&lt;p&gt;让我们看看编译器会做什么（使用 &lt;code&gt;gcc -O2&lt;&#x2F;code&gt; 编译）：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;asm&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-asm &quot;&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute:
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rdi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; unsigned temp = *arg0;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jle     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L2&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                     ; if (temp &amp;gt; 10) {
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;      ;   *arg1 = 1;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rdi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ;   temp = *arg0;   &#x2F;&#x2F; 注意：这里重新从内存取了值
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L2:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                    ; }
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;5&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                  ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jle     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L1&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                     ; if (temp &amp;gt; 5) {
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;sal     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;         ;   *arg2 &amp;lt;&amp;lt;= 1;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L1:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                    ; }
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                             ; return;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;注意关键的一点：&lt;code&gt;*input&lt;&#x2F;code&gt; 被&lt;strong&gt;读取了两次&lt;&#x2F;strong&gt;（第 6 行再次从 &lt;code&gt;[rdi]&lt;&#x2F;code&gt; 读取）。&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;为什么？&lt;&#x2F;strong&gt; 因为编译器担心 &lt;code&gt;input&lt;&#x2F;code&gt; 和 &lt;code&gt;output&lt;&#x2F;code&gt; 可能指向同一地址。如果它们是同一个指针，那么第一个 &lt;code&gt;if&lt;&#x2F;code&gt; 块中的 &lt;code&gt;*output = 1&lt;&#x2F;code&gt; 就改变了 &lt;code&gt;*input&lt;&#x2F;code&gt; 的值！因此，第二个 &lt;code&gt;if&lt;&#x2F;code&gt; 必须重新读取 &lt;code&gt;*input&lt;&#x2F;code&gt; 的值，不能直接使用之前读取的值。&lt;&#x2F;p&gt;
+&lt;p&gt;这就是 aliasing 带来的性能损失：编译器不得不生成保守的代码。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;restrict-guan-jian-zi-gao-su-bian-yi-qi-bu-hui-you-bie-ming&quot;&gt;restrict 关键字：告诉编译器&quot;不会有别名&quot;&lt;&#x2F;h3&gt;
+&lt;p&gt;C99 引入了 &lt;code&gt;restrict&lt;&#x2F;code&gt; 关键字，它是程序员向编译器做出的&lt;strong&gt;承诺&lt;&#x2F;strong&gt;：这个指针指向的内存区域在函数执行期间不会通过其他指针访问。&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;c&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-c &quot;&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; 版本2：带 restrict
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;void &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute_restrict&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;const unsigned int &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;restrict &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;input&lt;&#x2F;span&gt;&lt;span&gt;, 
+&lt;&#x2F;span&gt;&lt;span&gt;                      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;unsigned int &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;restrict &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;output&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;(*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;        *output = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;(*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;5&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;        *output *= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;现在我们只是在函数签名上加了 &lt;code&gt;restrict&lt;&#x2F;code&gt;，函数体完全相同。再看编译结果（&lt;code&gt;gcc -O2&lt;&#x2F;code&gt;）：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;asm&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-asm &quot;&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute_restrict:
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rdi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; unsigned temp = *arg0;  &#x2F;&#x2F; 注意：只读取一次arg0
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jg      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L8&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                     ; if (temp &amp;gt; 10) goto L8;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;5&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                  ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jg      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L9&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                     ; if (temp &amp;gt; 5) goto L9;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                             ;   return;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L8:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                    ; L8:
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                  ; temp = 2;  &#x2F;&#x2F; 注意：这里直接得到 *arg1 = 1 * 2;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; *arg1 = temp;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                             ; return;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.L9:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                    ; L9:
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; temp = *arg1;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;add     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                ; temp *= 2;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; *arg1 = temp;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                             ; return;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;对比两个版本，区别非常明显：&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;*input&lt;&#x2F;code&gt; 只被读取一次&lt;&#x2F;strong&gt;（第 1 行 &lt;code&gt;mov eax, DWORD PTR [rdi]&lt;&#x2F;code&gt;）：编译器知道 &lt;code&gt;*output = 1&lt;&#x2F;code&gt; 不会影响 &lt;code&gt;*input&lt;&#x2F;code&gt; 的值，可以在之后的比较中继续使用寄存器 &lt;code&gt;eax&lt;&#x2F;code&gt; 中的值&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;更激进的优化&lt;&#x2F;strong&gt;：当 &lt;code&gt;*input &amp;gt; 10&lt;&#x2F;code&gt; 时（&lt;code&gt;.L8&lt;&#x2F;code&gt; 分支），编译器推导出最终结果是 &lt;code&gt;2&lt;&#x2F;code&gt;，直接将常量 &lt;code&gt;2&lt;&#x2F;code&gt; 赋值并写入 &lt;code&gt;*output&lt;&#x2F;code&gt;，而不是先写 &lt;code&gt;1&lt;&#x2F;code&gt; 再乘以 &lt;code&gt;2&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;这就是 &lt;code&gt;restrict&lt;&#x2F;code&gt; 关键字的威力：它让编译器能够根据 no-alias 假设进行更全面的优化。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;rustde-aliasing-rule&quot;&gt;Rust的Aliasing Rule&lt;&#x2F;h2&gt;
+&lt;p&gt;现在我们回到 Rust。理解了 C 语言的问题后，Rust 的优势就显而易见了。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;yin-yong-tian-ran-bao-zheng-no-aliasing&quot;&gt;引用天然保证 No-Aliasing&lt;&#x2F;h3&gt;
+&lt;p&gt;Rust 对引用有严格的借用规则：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;要么&lt;&#x2F;strong&gt;有多个不可变引用（&lt;code&gt;&amp;amp;T&lt;&#x2F;code&gt;）&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;要么&lt;&#x2F;strong&gt;有一个可变引用（&lt;code&gt;&amp;amp;mut T&lt;&#x2F;code&gt;）&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;但不能同时存在&lt;&#x2F;strong&gt;&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;这个规则天然地保证了：&lt;strong&gt;当存在可变引用时，不会有其他引用指向同一块内存&lt;&#x2F;strong&gt;。这正是 no-aliasing 的定义！&lt;&#x2F;p&gt;
+&lt;p&gt;让我们看看文章开头的 Rust 例子会被编译成什么：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;pub fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;input&lt;&#x2F;span&gt;&lt;span&gt;: &amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;output&lt;&#x2F;span&gt;&lt;span&gt;: &amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mut u32&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        *output = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;5 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        *output *= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;编译结果 (&lt;code&gt;-C opt-level=3&lt;&#x2F;code&gt;)：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;asm&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-asm &quot;&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute:
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;ecx&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;dword ptr &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rdi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; unsigned input_val = *arg0;  &#x2F;&#x2F; 注意：只读取一次
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                  ; unsigned result = 2; &#x2F;&#x2F; 优化：预先计算出 *input &amp;gt; 10 时 *output = 2
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;ecx&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ja      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB0_3&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; if (input_val &amp;gt; 10) goto LBB0_3;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;ecx&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;6&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                  ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jb      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB0_4&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; if (input_val &amp;lt;= 5) return;  &#x2F;&#x2F; 两个条件都不满足，什么也不做
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;dword ptr &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; result = *arg1;              &#x2F;&#x2F; 只满足第二个条件，乘2
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;add     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                ; result *= 2;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB0_3:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                ; LBB0_3:   &#x2F;&#x2F; 如果 *input &amp;gt; 10 会跳到这里
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;dword ptr &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; *arg1 = result;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB0_4:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                             ; return;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;可以看到，&lt;code&gt;*input&lt;&#x2F;code&gt; 同样只被读取一次（第 1 行，保存在 &lt;code&gt;ecx&lt;&#x2F;code&gt; 中），编译器还预先将常量 &lt;code&gt;2&lt;&#x2F;code&gt; 加载到 &lt;code&gt;eax&lt;&#x2F;code&gt; 中（第 2 行），为 &lt;code&gt;*input &amp;gt; 10&lt;&#x2F;code&gt; 的情况做准备。当 &lt;code&gt;*input &amp;gt; 10&lt;&#x2F;code&gt; 时，会跳转到 &lt;code&gt;.LBB0_3&lt;&#x2F;code&gt; 直接写入这个预先准备好的值。这和带 &lt;code&gt;restrict&lt;&#x2F;code&gt; 的 C 版本采用了相似的优化策略。&lt;&#x2F;p&gt;
+&lt;p&gt;Rust 的借用规则让编译器确信 &lt;code&gt;input&lt;&#x2F;code&gt; 和 &lt;code&gt;output&lt;&#x2F;code&gt; 不会指向同一块内存，因此可以安全地进行激进优化。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;luo-zhi-zhen-hui-dao-c-de-shi-jie&quot;&gt;裸指针：回到 C 的世界&lt;&#x2F;h3&gt;
+&lt;p&gt;那么，如果我们绕过借用检查器，使用裸指针（raw pointer）呢？&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;pub unsafe fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute_raw&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;input&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;*const u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;output&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;*mut u32&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;10 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        *output = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;*input &amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;5 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        *output *= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;编译结果 (&lt;code&gt;-C opt-level=3&lt;&#x2F;code&gt;)：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;asm&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-asm &quot;&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;compute_raw:
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;dword ptr &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rdi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; unsigned temp = *arg0;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;11&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jae     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB1_1&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; if (temp &amp;gt;= 11) goto LBB1_1;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;6&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                  ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jae     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB1_3&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; if (temp &amp;gt;= 6) goto LBB1_3;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB1_4:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                             ; return;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB1_1:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                ; LBB1_1:  &#x2F;&#x2F; temp &amp;gt; 10 会跳到这里
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;dword ptr &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;      ; *arg1 = 1;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;dword ptr &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rdi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;    ; temp = *arg0;  &#x2F;&#x2F; 注意：重新读取内存值
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;cmp     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;6&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                  ; 
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;jb      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB1_4&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                 ; if (temp &amp;lt;= 5) return;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;.LBB1_3:&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                ; LBB1_3:  &#x2F;&#x2F; temp &amp;gt; 5 会跳到这里
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;shl     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;dword ptr &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;         ; *arg1 &amp;lt;&amp;lt;= 1;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                             ; return;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;可以看到，在 &lt;code&gt;.LBB1_1&lt;&#x2F;code&gt; 分支中，&lt;code&gt;*input&lt;&#x2F;code&gt; 被读取了两次（第 1 行和第 10 行，都是 &lt;code&gt;mov eax, dword ptr [rdi]&lt;&#x2F;code&gt;）。这和不带 &lt;code&gt;restrict&lt;&#x2F;code&gt; 的 C 版本的行为一致：编译器必须在写入 &lt;code&gt;*output = 1&lt;&#x2F;code&gt; 之后重新读取 &lt;code&gt;*input&lt;&#x2F;code&gt;，因为它不能确定两个指针是否指向同一块内存。&lt;&#x2F;p&gt;
+&lt;p&gt;这说明：&lt;strong&gt;Rust 对裸指针没有 aliasing 假设&lt;&#x2F;strong&gt;。编译器会保守地认为两个裸指针可能指向同一块内存。这是合理的，因为裸指针绕过了借用检查器，编译器无法保证它们的关系。&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;borrow-rules-qiang-hua-de-aliasing-rules&quot;&gt;Borrow Rules = 强化的 Aliasing Rules&lt;&#x2F;h3&gt;
+&lt;p&gt;通过对比可以看出：&lt;&#x2F;p&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;语言&#x2F;方式&lt;&#x2F;th&gt;&lt;th&gt;Aliasing 保证&lt;&#x2F;th&gt;&lt;th&gt;编译器优化&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;C（普通指针）&lt;&#x2F;td&gt;&lt;td&gt;❌ 可能有 alias&lt;&#x2F;td&gt;&lt;td&gt;保守&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;C（restrict）&lt;&#x2F;td&gt;&lt;td&gt;✅ 程序员承诺 no-alias&lt;&#x2F;td&gt;&lt;td&gt;激进&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;Rust（引用）&lt;&#x2F;td&gt;&lt;td&gt;✅ 编译器强制 no-alias&lt;&#x2F;td&gt;&lt;td&gt;激进&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;Rust（裸指针）&lt;&#x2F;td&gt;&lt;td&gt;❌ 可能有 alias&lt;&#x2F;td&gt;&lt;td&gt;保守&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;p&gt;Rust 的借用规则本质上是一种&lt;strong&gt;编译器强制执行的 aliasing rule&lt;&#x2F;strong&gt;。它比 C 的 &lt;code&gt;restrict&lt;&#x2F;code&gt; 更强大，因为：&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;静态检查&lt;&#x2F;strong&gt;：违反规则会在编译时被发现，而不是运行时未定义行为&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;自动推导&lt;&#x2F;strong&gt;：编译器自动知道引用满足 no-alias，不需要程序员手动标注&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;全局保证&lt;&#x2F;strong&gt;：规则在整个程序中强制执行，而 &lt;code&gt;restrict&lt;&#x2F;code&gt; 只是局部承诺&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;这就是为什么 Rust 的 borrow checker 不仅保证了内存安全，还能带来性能优势——它为编译器提供了更多的优化信息。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;rust-reference-zen-me-xie-de&quot;&gt;Rust Reference 怎么写的？&lt;&#x2F;h2&gt;
+&lt;p&gt;Rust 官方文档在 &lt;a href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;reference&#x2F;behavior-considered-undefined.html#r-undefined.alias&quot;&gt;Undefined Behavior&lt;&#x2F;a&gt; 一节中明确列出了关于 aliasing 的规则。&lt;&#x2F;p&gt;
+&lt;p&gt;值得注意的是，&lt;strong&gt;Rust 的 pointer aliasing rule 仍在演进中&lt;&#x2F;strong&gt;。目前 Rust 团队正在通过 &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;rust-lang&#x2F;unsafe-code-guidelines&#x2F;blob&#x2F;master&#x2F;wip&#x2F;stacked-borrows.md&quot;&gt;Stacked Borrows&lt;&#x2F;a&gt; 和 &lt;a href=&quot;https:&#x2F;&#x2F;perso.crans.org&#x2F;vanille&#x2F;treebor&#x2F;&quot;&gt;Tree Borrows&lt;&#x2F;a&gt; 等模型来形式化这些规则。&lt;&#x2F;p&gt;
+&lt;p&gt;但对于涉及&lt;strong&gt;引用&lt;&#x2F;strong&gt;的情况，规则是明确的：&lt;&#x2F;p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;&lt;strong&gt;产生以下情况的引用是未定义行为：&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;一个可变引用（&lt;code&gt;&amp;amp;mut T&lt;&#x2F;code&gt;）与任何其他指向相同内存的引用（无论可变或不可变）同时存活&lt;&#x2F;li&gt;
+&lt;li&gt;一个不可变引用（&lt;code&gt;&amp;amp;T&lt;&#x2F;code&gt;）与指向相同内存的可变引用同时存活&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;&#x2F;blockquote&gt;
+&lt;p&gt;这些规则确保了：&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;独占性&lt;&#x2F;strong&gt;：&lt;code&gt;&amp;amp;mut T&lt;&#x2F;code&gt; 保证独占访问，编译器可以假设没有其他路径访问这块内存&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;不变性&lt;&#x2F;strong&gt;：&lt;code&gt;&amp;amp;T&lt;&#x2F;code&gt; 保证数据不会被修改，编译器可以缓存读取的值&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;编译器正是基于这些保证来进行优化的。违反这些规则（通常通过 &lt;code&gt;unsafe&lt;&#x2F;code&gt; 代码）会导致未定义行为，编译器生成的优化代码可能产生意外结果。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;ti-wai-hua-c-de-strict-aliasing-rule&quot;&gt;题外话：C++ 的 Strict Aliasing Rule&lt;&#x2F;h2&gt;
+&lt;p&gt;C++ 还有另一种形式的 aliasing rule，称为 &lt;strong&gt;strict aliasing rule&lt;&#x2F;strong&gt;（严格别名规则）。它关注的是&lt;strong&gt;类型&lt;&#x2F;strong&gt;而不是指针本身。&lt;&#x2F;p&gt;
+&lt;p&gt;简单来说，C++ 的 strict aliasing rule 规定：&lt;strong&gt;编译器可以假设不同类型的指针不会指向重叠的内存&lt;&#x2F;strong&gt;（除了一些例外，如 &lt;code&gt;char*&lt;&#x2F;code&gt; 可以指向任何类型）。&lt;&#x2F;p&gt;
+&lt;p&gt;看一个具体的例子：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;cpp&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-cpp &quot;&gt;&lt;code class=&quot;language-cpp&quot; data-lang=&quot;cpp&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;int &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;get_value&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;int &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;p&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;float &lt;&#x2F;span&gt;&lt;span&gt;*&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;q&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    *p = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;42&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    *q = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;3.14&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;f&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return &lt;&#x2F;span&gt;&lt;span&gt;*p;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;直觉上，如果 &lt;code&gt;p&lt;&#x2F;code&gt; 和 &lt;code&gt;q&lt;&#x2F;code&gt; 指向同一块内存，这个函数应该返回 &lt;code&gt;3.14f&lt;&#x2F;code&gt; 的位表示（一个整数，通常是 &lt;code&gt;1078523331&lt;&#x2F;code&gt;）。但实际上，编译器会基于 strict aliasing rule 进行优化：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;asm&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-asm &quot;&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;get_value:
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rdi&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;42&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;         ; *arg0 = 42;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;eax&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;42&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                     ; int temp = 42;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;mov     &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;DWORD PTR &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;rsi&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;0x4048f5c3&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt; ; *arg1 = 3.14000010f
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ret&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;                                 ; return temp;  &#x2F;&#x2F; 这里编译器返回了42，而没有重新取arg0指向的值
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;注意最后一行：编译器&lt;strong&gt;直接返回常量 &lt;code&gt;42&lt;&#x2F;code&gt;&lt;&#x2F;strong&gt;，而不是重新读取 &lt;code&gt;*p&lt;&#x2F;code&gt; 的值。因为编译器假设 &lt;code&gt;int*&lt;&#x2F;code&gt; 和 &lt;code&gt;float*&lt;&#x2F;code&gt; 不会指向同一块内存，所以认为 &lt;code&gt;*q = 3.14f&lt;&#x2F;code&gt; 不会影响 &lt;code&gt;*p&lt;&#x2F;code&gt; 的值。&lt;&#x2F;p&gt;
+&lt;p&gt;如果我们真的让 &lt;code&gt;p&lt;&#x2F;code&gt; 和 &lt;code&gt;q&lt;&#x2F;code&gt; 指向同一块内存：&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;cpp&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-cpp &quot;&gt;&lt;code class=&quot;language-cpp&quot; data-lang=&quot;cpp&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;int&lt;&#x2F;span&gt;&lt;span&gt; value = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;int&lt;&#x2F;span&gt;&lt;span&gt; result = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;get_value&lt;&#x2F;span&gt;&lt;span&gt;(&amp;amp;value, reinterpret_cast&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;float&lt;&#x2F;span&gt;&lt;span&gt;*&amp;gt;(&amp;amp;value));
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; result == 42，而不是 3.14f 的位表示！
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; value 的内存中存储的是 3.14f 的位表示，但函数返回了 42
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;这是一个违反直觉的结果：内存中的值已经被改变了，但函数返回的却是旧值。这就是 strict aliasing rule 导致的未定义行为——编译器的优化假设被违反了。&lt;&#x2F;p&gt;
+&lt;p&gt;这是一种基于&lt;strong&gt;类型的 aliasing rule&lt;&#x2F;strong&gt;，与我们之前讨论的基于&lt;strong&gt;可变性和独占性的 aliasing rule&lt;&#x2F;strong&gt;（Rust&#x2F;C restrict）不同。两者的目标都是给编译器更多优化空间，但约束的角度不同：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;C&#x2F;Rust 的 restrict&#x2F;borrow&lt;&#x2F;strong&gt;：关注同一类型的多个指针是否重叠&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;C++ 的 strict aliasing&lt;&#x2F;strong&gt;：关注不同类型的指针是否重叠&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Rust 也有类似的规则（不同类型的引用不应指向同一内存），但由于 Rust 的类型系统和借用检查器的限制，在安全代码中很难违反这个规则。&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;zong-jie&quot;&gt;总结&lt;&#x2F;h2&gt;
+&lt;p&gt;通过从 C 语言的 &lt;code&gt;restrict&lt;&#x2F;code&gt; 关键字出发，我们理解了 aliasing 对编译器优化的影响：&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;Aliasing 是性能杀手&lt;&#x2F;strong&gt;：当编译器不确定两个指针是否重叠时，必须生成保守的代码&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;C 的 &lt;code&gt;restrict&lt;&#x2F;code&gt;&lt;&#x2F;strong&gt;：程序员手动承诺 no-alias，但没有编译时检查&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;Rust 的引用&lt;&#x2F;strong&gt;：编译器通过借用规则强制保证 no-alias，自动获得优化&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;strong&gt;Rust 的裸指针&lt;&#x2F;strong&gt;：和 C 的普通指针一样，编译器保守处理&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;Rust 的借用检查器本质上是&lt;strong&gt;把 aliasing rule 编码到类型系统中&lt;&#x2F;strong&gt;，在保证内存安全的同时，也为编译器提供了丰富的优化信息。这是 Rust &quot;零成本抽象&quot;理念的一个完美体现：安全的代码也是高效的代码。&lt;&#x2F;p&gt;
+&lt;hr &#x2F;&gt;
+&lt;p&gt;&lt;strong&gt;参考资料&lt;&#x2F;strong&gt;：&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;reference&#x2F;behavior-considered-undefined.html&quot;&gt;Rust Reference: Behavior considered undefined&lt;&#x2F;a&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;a href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;nomicon&#x2F;aliasing.html&quot;&gt;The Rustonomicon: Aliasing&lt;&#x2F;a&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;a href=&quot;https:&#x2F;&#x2F;en.cppreference.com&#x2F;w&#x2F;c&#x2F;language&#x2F;restrict&quot;&gt;C99 Standard: The restrict type qualifier&lt;&#x2F;a&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;rust-lang&#x2F;unsafe-code-guidelines&#x2F;blob&#x2F;master&#x2F;wip&#x2F;stacked-borrows.md&quot;&gt;Stacked Borrows: An Aliasing Model For Rust&lt;&#x2F;a&gt;&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+</content>
+        
+    </entry>
+</feed>
